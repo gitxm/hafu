@@ -89,30 +89,35 @@ else
 fi
 
 # 安装 nginx
-if [[ $(systemctl is-active nginx) != "active" ]]; then
-    echo "正在安装 nginx ..."
-	$PM -y install epel-release > /dev/null 2>&1
-    $PM -y install nginx > /dev/null 2>&1
-    mkdir /etc/nginx/cert
-
-    systemctl start nginx
-
-    if [[ $(systemctl is-active nginx) != "active" ]]; then
-        echo "安装 nginx 失败，请检查网络和配置。"
-        exit 1
+if [[ -f "/www/server/nginx/sbin/nginx" ]]; then
+    echo "检测到nginx已安装在/www/server/nginx/sbin路径..."
+    NGINX_PATH="/www/server/nginx"
+    
+    # 创建cert目录（如果不存在）
+    if [[ ! -d "$NGINX_PATH/cert" ]]; then
+        mkdir -p $NGINX_PATH/cert
     fi
-
-    systemctl enable nginx > /dev/null 2>&1
-    echo "nginx 已经安装并启动成功。"
+    
+    # 检查nginx是否运行
+    if ! pgrep -x "nginx" > /dev/null; then
+        echo "启动nginx..."
+        $NGINX_PATH/sbin/nginx
+        if ! pgrep -x "nginx" > /dev/null; then
+            echo "启动nginx失败，请检查配置。"
+            exit 1
+        fi
+    fi
+    
+    echo "nginx已经就绪。"
 else
-    echo "nginx 已经安装，跳过安装步骤。"
+    echo "未在指定路径找到nginx，请确认安装路径是否为/www/server/nginx/sbin"
+    exit 1
 fi
-
 
 # 生成 SSL 证书
 openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 \
   -subj "/C=CN/ST=Beijing/L=Beijing/O=MyOrg/OU=MyUnit/CN=$IP" \
-  -keyout /etc/nginx/cert/server.key -out /etc/nginx/cert/server.crt > /dev/null 2>&1
+  -keyout $NGINX_PATH/cert/server.key -out $NGINX_PATH/cert/server.crt > /dev/null 2>&1
 
 # 配置 hosts
 # echo "解析地址hosts"
@@ -139,7 +144,7 @@ EOF
 systemctl restart dnsmasq
 
 # 配置 nginx
-cat << EOF > /etc/nginx/nginx.conf
+cat << EOF > $NGINX_PATH/conf/nginx.conf
 worker_processes 1;
 events {
   worker_connections 1024;
@@ -153,14 +158,14 @@ http {
 		listen 443 ssl;
 		listen 80;
 		server_name $IP;  # 替换为你的域名(或 IP 地址)
-		ssl_certificate /etc/nginx/cert/server.crt;
-		ssl_certificate_key /etc/nginx/cert/server.key;
+		ssl_certificate $NGINX_PATH/cert/server.crt;
+		ssl_certificate_key $NGINX_PATH/cert/server.key;
 		ssl_session_timeout 5m;
 		ssl_ciphers HIGH:!aNULL:!MD5;
 		ssl_prefer_server_ciphers on;
 	 
 		location / {
-			root /usr/share/nginx/html/;
+			root $NGINX_PATH/html/;
 			index index.html index.htm;
 		}
 
@@ -215,18 +220,20 @@ fi
 # 下载文件
 if type curl >/dev/null 2>&1; then
     # 使用 curl 下载
-    curl -sSfLo /usr/share/nginx/html/gongcheng.apk $apk_url
+    curl -sSfLo $NGINX_PATH/html/gongcheng.apk $apk_url
 elif type wget >/dev/null 2>&1; then
     # 使用 wget 下载
-    wget -q $apk_url -P /usr/share/nginx/html/gongcheng.apk
+    wget -q $apk_url -O $NGINX_PATH/html/gongcheng.apk
 fi
-systemctl restart nginx
+
+# 重启nginx
+$NGINX_PATH/sbin/nginx -s reload
 
 if [ $? -eq 0 ]; then
 	echo ""
-	echo "nginx启动成功，DNS搭建成功，你的DNS是$IP,你搭建的是$type_name，两部手机A 和B ，A 开热点，B 连上A 开的热点，修改WiFi 设置里面的DNS 地址为上面这个，然后B再开热点，车机连B手机的热点，然后打开智能手册应该就会安装工程模式了"
+	echo "nginx重新加载成功，DNS搭建成功，你的DNS是$IP,你搭建的是$type_name，两部手机A 和B ，A 开热点，B 连上A 开的热点，修改WiFi 设置里面的DNS 地址为上面这个，然后B再开热点，车机连B手机的热点，然后打开智能手册应该就会安装工程模式了"
 	echo -e "\e[31m防火墙中放行 53、80、443 端口\e[0m"
 	echo ""
 else
-	echo -e "\e[31mnginx启动失败，请检查配置文件\e[0m"
+	echo -e "\e[31mnginx重新加载失败，请检查配置文件\e[0m"
 fi
